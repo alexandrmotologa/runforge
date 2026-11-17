@@ -1,17 +1,36 @@
-# runforge
+<div align="center">
+  <img src="docs/images/runforge_logo.png" width="180" alt="runforge logo" />
+  <h1>runforge</h1>
+  <p><strong>Deterministic durable execution engine, trajectory-to-workflow compiler, and control plane in Go for autonomous AI agents.</strong></p>
+  <p>
+    <a href="#key-capabilities">Key Capabilities</a> •
+    <a href="#live-demonstration">Live Demo</a> •
+    <a href="#system-architecture">Architecture</a> •
+    <a href="#control-plane-studio-and-ui">Control Plane Studio</a> •
+    <a href="#installation-and-quick-start">Quick Start</a> •
+    <a href="#cli-usage">CLI Usage</a> •
+    <a href="#license">License</a>
+  </p>
+</div>
 
-> Deterministic durable execution engine, trajectory-to-workflow compiler, and control plane in Go for autonomous AI agents.
+---
 
-`runforge` is a single-binary control plane and durable runtime designed to reduce token waste and execution instability in autonomous agent workflows (such as Claude Code, Cursor, OpenCode, AutoGen, and CrewAI).
+`runforge` is a single-binary control plane and durable runtime designed to eliminate token waste and execution instability in autonomous agent workflows (such as Claude Code, Cursor, OpenCode, AutoGen, and CrewAI).
 
 By capturing exploratory ReAct trajectories from initial agent executions, `runforge` builds a causal dependency graph, prunes dead-end probes, and compiles validated sequences into deterministic playbooks (`workflow.yaml` or standalone native scripts). Subsequent recurring runs execute rigid commands directly inside native operating system sandboxes with zero LLM tokens, cutting recurring token consumption by 90% to 95%.
+
+---
+
+## Live Demonstration
+
+![runforge Live Walkthrough](docs/images/runforge_demo.gif)
 
 ---
 
 ## Key Capabilities
 
 1. **Zero-CGO Single-Binary Architecture**:
-   - Compiles into a self-contained executable under 25MB with no external C runtime dependencies.
+   - Compiles into a self-contained executable under 25MB (14.8MB production footprint) with no external C runtime dependencies.
    - Starts in under 10 milliseconds with an idle resident memory footprint under 25MB RAM.
    - Eliminates heavy Node.js 24+ runtimes and mandatory Docker daemon prerequisites.
 
@@ -30,13 +49,56 @@ By capturing exploratory ReAct trajectories from initial agent executions, `runf
    - Linux: Utilizes Linux namespaces and process isolation.
    - Cross-platform direct runner with environment sanitization and execution timeouts.
 
-5. **Automated Model Handoff**:
-   - Routes initial zero-shot exploration to frontier models (Claude 3.5 Sonnet, GPT-4o).
-   - Automatically shifts recurring executions to deterministic sandbox scripts or fast, low-cost models (Gemini Flash, Llama 3.1 8B, local Ollama).
+5. **Live Recording Reverse Proxy**:
+   - Built-in HTTP proxy (`runforge proxy`) that intercepts `/v1/chat/completions` from agents in real time.
+   - Forwards traffic upstream with zero latency while recording every tool call directly into SQLite WAL.
+   - Compiles trajectories automatically upon session termination.
 
-6. **Embedded React 19 Control Plane Studio**:
+6. **Drift Self-Healing with SLMs**:
+   - Detects when a compiled deterministic command fails due to repository changes (e.g. moved files or modified flags).
+   - Invokes a low-cost model (Gemini Flash or local Llama 3.1 8B) to diagnose the error, repair the command, and re-execute in the sandbox.
+
+7. **Time-Travel and Interactive Step Debugger**:
+   - Step-by-step CLI (`runforge run --step`) and Web console execution.
+   - Inspects state variables, allows variable overrides, and supports rewinding to earlier SQLite checkpoints.
+
+8. **Enterprise CI/CD Exporter**:
+   - Translates compiled playbooks directly into production CI workflows (GitHub Actions, GitLab CI, Dockerfile) with zero agent token dependencies.
+
+9. **Embedded React 19 Control Plane Studio**:
    - Embedded directly into the Go binary via `//go:embed` and served locally on port `7777`.
-   - Visualizes live step execution DAGs, trajectory diff comparisons, real-time Server-Sent Events (SSE) terminal logs, and Human-in-the-Loop approval gates.
+   - Features real-time Server-Sent Events (SSE), execution DAG visualizers, trajectory diffs, and Human-in-the-Loop approval gates.
+
+---
+
+## Control Plane Studio and UI
+
+### Desktop Control Plane Dashboard
+Authentic live view of active runs, token reduction metrics, step progression DAG, and real-time SSE execution logs:
+
+![runforge Desktop Control Plane Dashboard](docs/images/dashboard_desktop.png)
+
+### Trajectory Compiler and Diff View
+Side-by-side comparison of raw exploratory agent traces versus compiled deterministic playbooks, featuring the interactive ROI savings calculator:
+
+![runforge Trajectory Compiler View](docs/images/compiler_desktop.png)
+
+### Production CI/CD Pipeline Exporter
+Exporting compiled playbooks into native GitHub Actions workflows with zero LLM runtime overhead:
+
+![runforge CI Export View](docs/images/ci_export_view.png)
+
+### Non-Repudiable Execution Audit Report
+Cryptographic and transactional audit trail modal generated directly from the SQLite WAL ledger:
+
+![runforge Non-Repudiable Audit Report](docs/images/audit_modal.png)
+
+### Responsive Mobile Interface
+Fully adaptable mobile interface verified on smartphone viewports (390x844):
+
+<div align="center">
+  <img src="docs/images/dashboard_mobile.png" width="360" alt="runforge Mobile Dashboard" />
+</div>
 
 ---
 
@@ -105,7 +167,7 @@ cd runforge
 make build
 
 # Or compile the Go executable directly if web assets are bundled
-go build -o runforge.exe ./cmd/runforge
+go build -ldflags="-s -w" -o runforge.exe ./cmd/runforge
 ```
 
 ### CLI Usage
@@ -160,7 +222,7 @@ Configure your autonomous agent or script:
 export OPENAI_BASE_URL=http://localhost:8080/v1
 ```
 
-#### 5. Interactive Step Debugger & Time Travel
+#### 5. Interactive Step Debugger and Time Travel
 Step through deterministic workflows one action at a time with variable inspection and checkpoint rewind:
 
 ```bash

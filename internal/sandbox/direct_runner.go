@@ -95,19 +95,24 @@ func (d *DirectRunner) Execute(ctx context.Context, command string, args []strin
 // sanitizeEnvironment retains safe system environment variables while overlaying custom ones.
 func sanitizeEnvironment(customEnv map[string]string) []string {
 	safeKeys := map[string]bool{
-		"PATH":        true,
-		"PATHEXT":     true,
-		"SYSTEMROOT":  true,
-		"COMSPEC":     true,
-		"TEMP":        true,
-		"TMP":         true,
-		"HOME":        true,
-		"USERPROFILE": true,
-		"LANG":        true,
-		"LC_ALL":      true,
-		"GO111MODULE": true,
-		"GOPATH":      true,
-		"GOROOT":      true,
+		"PATH":         true,
+		"PATHEXT":      true,
+		"SYSTEMROOT":   true,
+		"COMSPEC":      true,
+		"TEMP":         true,
+		"TMP":          true,
+		"HOME":         true,
+		"USERPROFILE":  true,
+		"LOCALAPPDATA": true,
+		"APPDATA":      true,
+		"HOMEDRIVE":    true,
+		"HOMEPATH":     true,
+		"LANG":         true,
+		"LC_ALL":       true,
+		"GO111MODULE":  true,
+		"GOPATH":       true,
+		"GOROOT":       true,
+		"GOCACHE":      true,
 	}
 
 	envMap := make(map[string]string)
