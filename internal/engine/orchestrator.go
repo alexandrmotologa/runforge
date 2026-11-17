@@ -31,6 +31,7 @@ type Orchestrator struct {
 	client      ModelClient
 	router      *HandoffRouter
 	costTracker *telemetry.CostTracker
+	healer      *DriftHealer
 
 	subscribersMu sync.RWMutex
 	subscribers   map[chan OrchestratorEvent]bool
@@ -50,6 +51,7 @@ func NewOrchestrator(ledger *durable.Ledger, runner sandbox.Runner, client Model
 		client:      client,
 		router:      NewHandoffRouter("", ""),
 		costTracker: telemetry.NewCostTracker(),
+		healer:      NewDriftHealer(client, runner, "gemini-1.5-flash"),
 		subscribers: make(map[chan OrchestratorEvent]bool),
 	}
 }
@@ -187,7 +189,37 @@ func (o *Orchestrator) RunPlaybook(ctx context.Context, pb *compiler.Playbook, r
 				execResult, err := o.runner.Execute(ctx, parts[0], parts[1:], sandbox.Limits{
 					Timeout: 120 * time.Second,
 				})
-				if err != nil {
+				if err != nil || exitCode != 0 {
+					// Attempt autonomous self-healing via SLM before marking as failed
+					if o.healer != nil {
+						o.broadcast(OrchestratorEvent{
+							Type:      "healing_attempted",
+							RunID:     run.ID,
+							StepIndex: i,
+							Data:      stepDef.Run,
+						})
+						healRes, healErr := o.healer.AttemptHeal(ctx, stepDef, exitCode, outPayload, "")
+						if healErr == nil && healRes != nil && healRes.Success {
+							step.Name = fmt.Sprintf("%s (Healed)", step.Name)
+							step.InputPayload = healRes.HealedCommand
+							step.OutputPayload = fmt.Sprintf("[DRIFT HEALED: %s]\n%s", healRes.Diagnosis, healRes.Output)
+							step.ExitCode = 0
+							step.Status = durable.StepSuccess
+							step.DurationMs = time.Since(stepStart).Milliseconds()
+							totalTokensIn += healRes.TokensUsed
+							totalCost += healRes.CostUSD
+							_ = o.ledger.UpdateStep(ctx, step)
+							o.broadcast(OrchestratorEvent{
+								Type:      "step_healed",
+								RunID:     run.ID,
+								StepIndex: i,
+								Data:      healRes,
+							})
+							// Successfully healed! Proceed to next step
+							continue
+						}
+					}
+
 					step.Status = durable.StepFailed
 					step.ExitCode = -1
 					step.OutputPayload = fmt.Sprintf("execution error: %v", err)

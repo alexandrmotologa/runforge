@@ -48,6 +48,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/compile", s.handleCompile)
 	s.mux.HandleFunc("/api/approvals/", s.handleApproval)
 	s.mux.HandleFunc("/api/events", s.handleSSE)
+	s.mux.HandleFunc("/api/export-ci", s.handleExportCI)
+	s.mux.HandleFunc("/api/audit-report/", s.handleAuditReport)
 
 	// Prometheus Metrics
 	s.mux.HandleFunc("/metrics", telemetry.PrometheusHandler(s.ledger))
@@ -294,6 +296,95 @@ func (s *Server) handleApproval(w http.ResponseWriter, r *http.Request) {
 		"approval_id": approvalID,
 		"status":      string(status),
 	})
+}
+
+func (s *Server) handleExportCI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
+		return
+	}
+
+	var req struct {
+		YAML   string `json:"yaml"`
+		Target string `json:"target"`
+	}
+	_ = json.Unmarshal(body, &req)
+
+	targetYAML := req.YAML
+	if targetYAML == "" {
+		targetYAML = string(body)
+	}
+
+	pb, err := compiler.FromYAML([]byte(targetYAML))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid playbook yaml: %v", err)})
+		return
+	}
+
+	gha, _ := compiler.ExportGitHubActions(pb)
+	gitlab, _ := compiler.ExportGitLabCI(pb)
+	docker, _ := compiler.ExportDockerfile(pb)
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"github_actions": gha,
+		"gitlab_ci":      gitlab,
+		"dockerfile":     docker,
+	})
+}
+
+func (s *Server) handleAuditReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	runID := strings.TrimPrefix(r.URL.Path, "/api/audit-report/")
+	if runID == "" {
+		http.Error(w, "missing run id", http.StatusBadRequest)
+		return
+	}
+
+	run, err := s.ledger.GetRun(r.Context(), runID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
+		return
+	}
+
+	steps, _ := s.ledger.GetStepsByRun(r.Context(), runID)
+
+	var report strings.Builder
+	report.WriteString(fmt.Sprintf("# runforge Non-Repudiable Execution Audit Report\n\n"))
+	report.WriteString(fmt.Sprintf("- **Run ID**: `%s`\n", run.ID))
+	report.WriteString(fmt.Sprintf("- **Workflow**: %s\n", run.Name))
+	report.WriteString(fmt.Sprintf("- **Status**: `%s`\n", run.Status))
+	report.WriteString(fmt.Sprintf("- **Execution Mode**: `%s`\n", run.Mode))
+	report.WriteString(fmt.Sprintf("- **Created**: %s\n", run.CreatedAt.Format(time.RFC3339)))
+	report.WriteString(fmt.Sprintf("- **Tokens In/Out**: %d / %d\n", run.TokensIn, run.TokensOut))
+	report.WriteString(fmt.Sprintf("- **Tokens Conserved**: %d\n", run.TokensSaved))
+	report.WriteString(fmt.Sprintf("- **Cost USD**: $%.4f (Saved: $%.4f)\n\n", run.CostUSD, run.CostSaved))
+
+	report.WriteString("## Atomic Steps Audit Trail (SQLite WAL)\n\n")
+	report.WriteString("| Step | Tool / Type | Status | Duration | Command / Details |\n")
+	report.WriteString("|---|---|---|---|---|\n")
+
+	for _, st := range steps {
+		cmdDisplay := strings.ReplaceAll(st.InputPayload, "\n", " ")
+		if len(cmdDisplay) > 50 {
+			cmdDisplay = cmdDisplay[:47] + "..."
+		}
+		report.WriteString(fmt.Sprintf("| #%02d | `%s` | `%s` | %dms | `%s` |\n",
+			st.StepIndex, st.ToolName, st.Status, st.DurationMs, cmdDisplay))
+	}
+
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(report.String()))
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {

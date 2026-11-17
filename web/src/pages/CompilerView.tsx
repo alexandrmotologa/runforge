@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Play, Sparkles, Check, FileCode, Terminal } from 'lucide-react';
+import { Play, Sparkles, Check, FileCode, Terminal, Layers } from 'lucide-react';
 import { CompilationResult } from '../types';
 import { TrajectoryDiff } from '../components/TrajectoryDiff';
+import { ROICalculator } from '../components/ROICalculator';
 
 const SAMPLE_TRAJECTORY = {
   id: "trace-code-review-01",
@@ -28,6 +29,8 @@ export const CompilerView: React.FC<CompilerViewProps> = ({ onCompile, onExecute
   const [compilation, setCompilation] = useState<CompilationResult | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [copiedScript, setCopiedScript] = useState<string | null>(null);
+  const [ciTarget, setCiTarget] = useState<'gha' | 'gitlab' | 'docker' | null>(null);
+  const [ciContent, setCiContent] = useState<string>('');
 
   const handleCompile = async () => {
     setLoading(true);
@@ -47,9 +50,31 @@ export const CompilerView: React.FC<CompilerViewProps> = ({ onCompile, onExecute
     setTimeout(() => setCopiedScript(null), 2000);
   };
 
+  const handleExportCI = async (target: 'gha' | 'gitlab' | 'docker') => {
+    if (!compilation) return;
+    try {
+      const res = await fetch('/api/export-ci', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ yaml: compilation.yaml, target }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const content = target === 'gha' ? data.github_actions : target === 'gitlab' ? data.gitlab_ci : data.dockerfile;
+        setCiContent(content);
+        setCiTarget(target);
+      }
+    } catch {
+      // Ignore
+    }
+  };
+
   return (
     <div className="space-y-6">
-      {/* Header and Controls */}
+      {/* 1. Interactive ROI Calculator */}
+      <ROICalculator />
+
+      {/* 2. Trajectory Ingestion Header */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
@@ -58,7 +83,7 @@ export const CompilerView: React.FC<CompilerViewProps> = ({ onCompile, onExecute
               <span>Trajectory-to-Workflow Compiler</span>
             </h3>
             <p className="text-xs text-slate-400 mt-1">
-              Ingest raw multi-turn agent traces (Claude Code, Cursor, ReAct). The compiler builds a causal DAG, prunes dead ends, extracts dynamic variables, and synthesizes a deterministic playbook.
+              Ingest multi-turn agent traces (Claude Code, Cursor, ReAct). Builds causal DAG, prunes non-contributing probes, and synthesizes deterministic playbooks.
             </p>
           </div>
 
@@ -88,17 +113,17 @@ export const CompilerView: React.FC<CompilerViewProps> = ({ onCompile, onExecute
           <textarea
             value={inputJSON}
             onChange={(e) => setInputJSON(e.target.value)}
-            rows={8}
+            rows={7}
             className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 font-mono text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50"
             placeholder="Paste agent execution trace JSON or JSONL..."
           />
         </div>
       </div>
 
-      {/* Trajectory Diff & Generated Artifacts */}
+      {/* 3. Trajectory Diff & Generated Artifacts */}
       {compilation && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-4 rounded-xl">
+          <div className="flex flex-wrap items-center justify-between bg-slate-900 border border-slate-800 p-4 rounded-xl gap-3">
             <div>
               <span className="text-xs font-medium text-slate-300">Deterministic Artifacts Ready</span>
               <p className="text-xs text-slate-500">
@@ -106,7 +131,7 @@ export const CompilerView: React.FC<CompilerViewProps> = ({ onCompile, onExecute
               </p>
             </div>
 
-            <div className="flex items-center space-x-3">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => handleCopy(compilation.yaml, 'yaml')}
                 className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-mono bg-slate-800 text-slate-200 hover:bg-slate-700 transition"
@@ -120,7 +145,24 @@ export const CompilerView: React.FC<CompilerViewProps> = ({ onCompile, onExecute
                 className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-mono bg-slate-800 text-slate-200 hover:bg-slate-700 transition"
               >
                 {copiedScript === 'bash' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Terminal className="w-3.5 h-3.5" />}
-                <span>Copy Bash</span>
+                <span>Bash</span>
+              </button>
+
+              {/* CI Exporters */}
+              <button
+                onClick={() => handleExportCI('gha')}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-mono bg-slate-800 text-slate-200 hover:bg-slate-700 transition"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>GitHub Actions</span>
+              </button>
+
+              <button
+                onClick={() => handleExportCI('docker')}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-mono bg-slate-800 text-slate-200 hover:bg-slate-700 transition"
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Dockerfile</span>
               </button>
 
               <button
@@ -132,6 +174,34 @@ export const CompilerView: React.FC<CompilerViewProps> = ({ onCompile, onExecute
               </button>
             </div>
           </div>
+
+          {/* CI Export Drawer */}
+          {ciTarget && (
+            <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-white uppercase tracking-wider font-mono">
+                  Exported Pipeline: {ciTarget === 'gha' ? 'GitHub Actions Workflow (.github/workflows/runforge_task.yml)' : 'Container Recipe (Dockerfile)'}
+                </span>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => handleCopy(ciContent, 'ci')}
+                    className="px-2.5 py-1 rounded text-xs font-mono bg-slate-800 text-slate-200 hover:bg-slate-700"
+                  >
+                    {copiedScript === 'ci' ? 'Copied!' : 'Copy Code'}
+                  </button>
+                  <button
+                    onClick={() => setCiTarget(null)}
+                    className="px-2 py-1 rounded text-xs text-slate-400 hover:text-white"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              <pre className="bg-slate-950 p-3 rounded-lg text-emerald-300 font-mono text-xs overflow-x-auto max-h-64 whitespace-pre-wrap">
+                {ciContent}
+              </pre>
+            </div>
+          )}
 
           <TrajectoryDiff compilation={compilation} />
         </div>

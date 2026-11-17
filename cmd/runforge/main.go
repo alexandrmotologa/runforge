@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/alexandrmotologa/runforge/internal/compiler"
 	"github.com/alexandrmotologa/runforge/internal/durable"
 	"github.com/alexandrmotologa/runforge/internal/engine"
+	"github.com/alexandrmotologa/runforge/internal/proxy"
 	"github.com/alexandrmotologa/runforge/internal/sandbox"
 	"github.com/alexandrmotologa/runforge/internal/server"
 	"github.com/alexandrmotologa/runforge/internal/telemetry"
@@ -38,6 +40,7 @@ trajectories into deterministic playbooks and executing them durably in native O
 
 	// 1. Command: run
 	var runParams []string
+	var stepMode bool
 	runCmd := &cobra.Command{
 		Use:   "run <playbook.yaml | trajectory.json>",
 		Short: "Execute a compiled deterministic workflow or agent trajectory",
@@ -93,6 +96,67 @@ trajectories into deterministic playbooks and executing them durably in native O
 			}
 
 			runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
+
+			if stepMode {
+				fmt.Printf("--> Entering Interactive Step Debugger for workflow %q\n", pb.Name)
+				stepper, err := engine.NewStepper(ledger, runner, pb, runID, inputVars)
+				if err != nil {
+					return fmt.Errorf("stepper init failed: %w", err)
+				}
+				reader := bufio.NewReader(os.Stdin)
+				for {
+					st := stepper.Status()
+					if st.IsComplete {
+						fmt.Println("[OK] All steps in workflow completed successfully!")
+						break
+					}
+					fmt.Printf("\n[Step %d/%d: %s] (n)ext, (r)ewind <idx>, (v)ar <k>=<v>, (c)ontinue, (q)uit: ",
+						st.CurrentStepIndex+1, st.TotalSteps, st.NextStep.Name)
+					line, _ := reader.ReadString('\n')
+					cmdStr := strings.TrimSpace(line)
+					if cmdStr == "q" || cmdStr == "quit" {
+						fmt.Println("Debugger exited by operator.")
+						break
+					} else if cmdStr == "c" || cmdStr == "continue" {
+						for !stepper.Status().IsComplete {
+							step, err := stepper.StepNext(context.Background())
+							if err != nil {
+								fmt.Printf("Error: %v\n", err)
+								break
+							}
+							fmt.Printf("--> Executed: %s (exit code %d)\n", step.Name, step.ExitCode)
+						}
+						break
+					} else if strings.HasPrefix(cmdStr, "r ") {
+						var idx int
+						fmt.Sscanf(cmdStr[2:], "%d", &idx)
+						_ = stepper.Rewind(context.Background(), idx)
+						fmt.Printf("Rewound to step index %d\n", idx)
+					} else if strings.HasPrefix(cmdStr, "v ") {
+						parts := strings.SplitN(cmdStr[2:], "=", 2)
+						if len(parts) == 2 {
+							stepper.SetVariable(parts[0], parts[1])
+							fmt.Printf("Set variable %s = %s\n", parts[0], parts[1])
+						}
+					} else {
+						step, err := stepper.StepNext(context.Background())
+						if err != nil {
+							fmt.Printf("[FAIL] Step failed: %v\n", err)
+						} else {
+							fmt.Printf("[PASS] %s finished (%dms, exit code %d)\n", step.Name, step.DurationMs, step.ExitCode)
+							if step.OutputPayload != "" {
+								outSnippet := strings.ReplaceAll(step.OutputPayload, "\n", " ")
+								if len(outSnippet) > 80 {
+									outSnippet = outSnippet[:77] + "..."
+								}
+								fmt.Printf("       out: %s\n", outSnippet)
+							}
+						}
+					}
+				}
+				return nil
+			}
+
 			fmt.Printf("--> Initiating execution [%s]: %s\n", runID, pb.Name)
 			fmt.Printf("--> Native Sandbox: %s (%s)\n", runner.Capabilities().EngineType, runner.Capabilities().Platform)
 
@@ -116,6 +180,7 @@ trajectories into deterministic playbooks and executing them durably in native O
 		},
 	}
 	runCmd.Flags().StringSliceVar(&runParams, "param", nil, "Input parameters (key=value)")
+	runCmd.Flags().BoolVar(&stepMode, "step", false, "Enable interactive step-by-step debugger")
 
 	// 2. Command: compile
 	var outYAML, outScript string
@@ -340,7 +405,87 @@ trajectories into deterministic playbooks and executing them durably in native O
 		},
 	}
 
-	// 6. Command: version
+	// 6. Command: proxy
+	var proxyPort int
+	var proxyTarget, proxyOutYAML string
+	var proxyAutoCompile bool
+	proxyCmd := &cobra.Command{
+		Use:   "proxy",
+		Short: "Start transparent LLM reverse proxy to record agent trajectories in real time",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ledger, err := durable.NewLedger(dbFile)
+			if err != nil {
+				return fmt.Errorf("failed to initialize ledger: %w", err)
+			}
+			defer ledger.Close()
+
+			proxyServer, err := proxy.NewProxyServer(proxy.ProxyConfig{
+				Port:        proxyPort,
+				TargetURL:   proxyTarget,
+				AutoCompile: proxyAutoCompile,
+				OutputYAML:  proxyOutYAML,
+			}, ledger)
+			if err != nil {
+				return fmt.Errorf("failed to create proxy: %w", err)
+			}
+
+			fmt.Println("==================================================")
+			fmt.Printf("runforge LLM Recording Proxy\n")
+			fmt.Printf("Listening:    http://localhost:%d\n", proxyPort)
+			fmt.Printf("Upstream:     %s\n", proxyTarget)
+			fmt.Printf("Auto-Compile: %v (Output: %s)\n", proxyAutoCompile, proxyOutYAML)
+			fmt.Println("Configure your agent with:")
+			fmt.Printf("  export OPENAI_BASE_URL=http://localhost:%d/v1\n", proxyPort)
+			fmt.Println("==================================================")
+
+			return http.ListenAndServe(fmt.Sprintf(":%d", proxyPort), proxyServer.Handler())
+		},
+	}
+	proxyCmd.Flags().IntVarP(&proxyPort, "port", "p", 8080, "Proxy listening port")
+	proxyCmd.Flags().StringVar(&proxyTarget, "target", "https://api.openai.com", "Target upstream API base URL")
+	proxyCmd.Flags().BoolVar(&proxyAutoCompile, "auto-compile", true, "Automatically compile trajectory on session completion")
+	proxyCmd.Flags().StringVarP(&proxyOutYAML, "output", "o", "workflow.yaml", "Destination path for auto-compiled workflow.yaml")
+
+	// 7. Command: export-ci
+	var ciTarget, ciOutput string
+	exportCICmd := &cobra.Command{
+		Use:   "export-ci <playbook.yaml>",
+		Short: "Export a compiled playbook into a production CI/CD pipeline",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			data, err := os.ReadFile(args[0])
+			if err != nil {
+				return fmt.Errorf("failed to read %s: %w", args[0], err)
+			}
+
+			pb, err := compiler.FromYAML(data)
+			if err != nil {
+				return fmt.Errorf("invalid playbook yaml: %w", err)
+			}
+
+			out, err := compiler.ExportCI(pb, ciTarget)
+			if err != nil {
+				return err
+			}
+
+			if ciOutput != "" {
+				if err := os.MkdirAll(filepath.Dir(ciOutput), 0755); err != nil {
+					return err
+				}
+				if err := os.WriteFile(ciOutput, []byte(out), 0644); err != nil {
+					return err
+				}
+				fmt.Printf("[OK] Exported %s pipeline to %s\n", ciTarget, ciOutput)
+			} else {
+				fmt.Println(out)
+			}
+			return nil
+		},
+	}
+	exportCICmd.Flags().StringVar(&ciTarget, "target", "github-actions", "Target format: github-actions, gitlab, docker")
+	exportCICmd.Flags().StringVarP(&ciOutput, "output", "o", "", "Path to write exported file (stdout if omitted)")
+
+	// 8. Command: version
 	versionCmd := &cobra.Command{
 		Use:   "version",
 		Short: "Display version, OS platform, and active sandbox primitives",
@@ -356,7 +501,7 @@ trajectories into deterministic playbooks and executing them durably in native O
 		},
 	}
 
-	rootCmd.AddCommand(runCmd, compileCmd, serveCmd, resumeCmd, inspectCmd, versionCmd)
+	rootCmd.AddCommand(runCmd, compileCmd, serveCmd, resumeCmd, inspectCmd, proxyCmd, exportCICmd, versionCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

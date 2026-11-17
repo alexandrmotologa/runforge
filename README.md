@@ -148,7 +148,37 @@ runforge serve --port 7777
 ```
 Open `http://localhost:7777` to inspect live DAG progression, savings charts, and approvals.
 
-#### 4. Resume an Interrupted Run
+#### 4. Live Recording Reverse Proxy
+Intercept LLM calls from any agent in real time and automatically compile playbooks on session exit:
+
+```bash
+runforge proxy --port 8080 --target https://api.openai.com -o workflow.yaml
+```
+
+Configure your autonomous agent or script:
+```bash
+export OPENAI_BASE_URL=http://localhost:8080/v1
+```
+
+#### 5. Interactive Step Debugger & Time Travel
+Step through deterministic workflows one action at a time with variable inspection and checkpoint rewind:
+
+```bash
+runforge run workflow.yaml --step
+```
+
+#### 6. Export to Production CI/CD Pipelines
+Translate compiled playbooks directly into native CI automation (zero agent tokens required):
+
+```bash
+# Export GitHub Actions workflow
+runforge export-ci workflow.yaml --target github-actions -o .github/workflows/task.yml
+
+# Export standalone container recipe
+runforge export-ci workflow.yaml --target docker -o Dockerfile
+```
+
+#### 7. Resume an Interrupted Run
 Resume execution from the exact SQLite WAL checkpoint without repeated steps:
 
 ```bash

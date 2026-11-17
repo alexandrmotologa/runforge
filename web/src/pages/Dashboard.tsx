@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { RotateCcw, Clock, Search } from 'lucide-react';
+import { RotateCcw, Clock, Search, FileText } from 'lucide-react';
 import { Run, Step, AggregateStats, Approval } from '../types';
 import { SavingsCard } from '../components/SavingsCard';
 import { RunTimeline } from '../components/RunTimeline';
@@ -35,6 +35,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [auditReport, setAuditReport] = useState<string | null>(null);
+
+  const handleDownloadAudit = async (runId: string) => {
+    try {
+      const res = await fetch(`/api/audit-report/${runId}`);
+      if (res.ok) {
+        const text = await res.text();
+        setAuditReport(text);
+      }
+    } catch {
+      // Ignore
+    }
+  };
 
   const filteredRuns = runs.filter(r => {
     const matchesSearch = r.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -158,6 +171,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </div>
 
                 <div className="flex items-center space-x-3">
+                  <button
+                    onClick={() => handleDownloadAudit(activeRun.id)}
+                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Audit Report</span>
+                  </button>
+
                   {activeRun.status === 'waiting_approval' && (
                     <button
                       onClick={() => onResumeRun(activeRun.id)}
@@ -237,6 +258,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
         onReject={onReject}
         onClose={() => {}}
       />
+
+      {/* Audit Report Viewer Modal */}
+      {auditReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <span className="text-sm font-semibold text-white font-mono flex items-center space-x-2">
+                <FileText className="w-4 h-4 text-emerald-400" />
+                <span>Non-Repudiable Execution Audit Report</span>
+              </span>
+              <button
+                onClick={() => setAuditReport(null)}
+                className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded bg-slate-800"
+              >
+                Close
+              </button>
+            </div>
+            <pre className="bg-slate-950 p-4 rounded-xl text-slate-300 font-mono text-xs overflow-y-auto max-h-96 whitespace-pre-wrap">
+              {auditReport}
+            </pre>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
