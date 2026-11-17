@@ -1,0 +1,15 @@
+version: 1
+name: Extracted from JSONL transcript
+description: Compiled deterministic workflow synthesized from agent trace transcript-trace
+steps:
+    - id: step_01
+      name: Run git
+      type: command
+      run: 'git add output/invoices_summary.csv && git commit -m ''feat: invoice triage batch 2026-Q1'''
+      assertions:
+        - exit_code == 0
+metadata:
+    compiled_at: "2026-11-17T20:17:39Z"
+    original_tokens: 0
+    compiled_tokens: 0
+    estimated_savings_pct: 85.71428571428571

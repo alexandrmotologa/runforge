@@ -1,0 +1,33 @@
+# runforge Enterprise Configuration
+version: 1
+
+server:
+  port: 7777
+  host: "127.0.0.1"
+  database_path: "runforge.db"
+  enable_wal: true
+  busy_timeout_ms: 5000
+
+sandbox:
+  engine: "auto" # options: auto, windows_jobs, linux_ns, direct
+  max_memory_mb: 512
+  max_cpu_percent: 80
+  default_timeout_seconds: 120
+  isolated_environment: true
+
+compiler:
+  pruning_aggressiveness: "balanced" # options: conservative, balanced, aggressive
+  deduplicate_reads: true
+  prune_failed_probes: true
+  synthesize_assertions: true
+  parameterize_inputs: true
+
+models:
+  frontier_default: "claude-3-5-sonnet"
+  slm_default: "gemini-1.5-flash"
+  enable_model_handoff: true
+
+telemetry:
+  prometheus_enabled: true
+  metrics_path: "/metrics"
+  audit_logging: true
